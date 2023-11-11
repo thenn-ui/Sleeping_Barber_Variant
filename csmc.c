@@ -4,7 +4,7 @@
 
 pthread_mutex_t id_init_lock;
 
-void tutor_sleep()
+void dotutoring()
 {
 	usleep(200); // will sleep for 0.2 ms
 }
@@ -17,21 +17,37 @@ void programming()
 void *student_thread(void *arg)
 {
 	int studentid = *(int*)arg;
+	free(arg);
 	printf("student id = %d\n", studentid);
-	pthread_mutex_unlock(&id_init_lock);
+
+	// arrives at the csmc center 
+	//
+	// finds an empty chair to sit in waiting area
+	//
+	// if no chair available then go back to programming
+	//
+	// once help received from tutor go back to programming
 }
 
 void *tutor_thread(void *arg)
 {
-	int tutorid= *(int*)arg;
+	int tutorid = *(int*)arg;
+	free(arg);
 	printf("tutor id = %d\n", tutorid);
-	pthread_mutex_unlock(&id_init_lock);
+
+	// find student with the highest priority
+	//
+	// start tutoring
 }
 
 void *coordinator_thread(void *arg)
 {
 	printf("coordinator thread started...\n");
 	sleep(5);
+
+	// once student arrives, queue the student based on student priority
+	//
+	// notify an idle tutor
 }
 
 
@@ -56,15 +72,17 @@ int main(int argc, char **argv)
 	pthread_t studenttids[studentscount];
 	for(i = 0; i < studentscount; i++)
 	{
-		pthread_mutex_lock(&id_init_lock);
-		pthread_create(&studenttids[i], NULL, student_thread, &i);
+		int *studentid = malloc(sizeof(int));
+		*studentid = i;
+		pthread_create(&studenttids[i], NULL, student_thread, studentid);
 	}
 
 	pthread_t tutorstids[tutorscount];
 	for(i = 0; i < tutorscount; i++)
 	{
-		pthread_mutex_lock(&id_init_lock);
-		pthread_create(&tutorstids[i], NULL, tutor_thread, &i);
+		int *tutorid = malloc(sizeof(int));
+		*tutorid = i;
+		pthread_create(&tutorstids[i], NULL, tutor_thread, tutorid);
 	}
 
 	pthread_join(coordinatortid, NULL);	
