@@ -37,6 +37,7 @@ sem_t student_to_coordinator;
 sem_t coordinator_to_tutor;
 
 StudentQueue studentqueue; // FIFO queue handled by student and coordinator
+pthread_mutex_t studentqueue_lock;
 StudentQueue *tutoringqueue; // Multi level FIFO queue handled by coordinator and Tutors
 pthread_mutex_t tutoringqueue_lock;
 
@@ -110,13 +111,16 @@ StudentDetails* removeFromTutoringQueue() //will always remove student with max 
 {
 
 	StudentQueue *priorityqueue = NULL;
-	int priority; 
+	int priority;
+	printf("==============================================\n");
 	for(priority = helpcount; priority > 0; priority--)
 	{
 		priorityqueue = &tutoringqueue[priority];
+		printf("pqueue - %p. priority - %d. qcount - %d. pqueue.head = %p\n", priorityqueue, priority, priorityqueue->count, priorityqueue->Head);
 		if(priorityqueue->count > 0)
 			break;
 	}
+	printf("==============================================\n");
 
 	if(priorityqueue == NULL || priorityqueue->Head == NULL) // No student in the queue
 	{
@@ -152,7 +156,7 @@ void *student_thread(void *arg)
 	int studentid = *(int*)arg;
 	int remaininghelps = helpcount;
 	free(arg);
-	//printf("student id = %d\n", studentid);
+	printf("student id = %d\n", studentid);
 
 	// arrives at the csmc center 
 	while(remaininghelps > 0)
@@ -167,18 +171,20 @@ void *student_thread(void *arg)
 				num_chairs--;
 				printf("S: Student %d takes a seat. Empty chairs = %d\n", studentid, num_chairs);
 				chairfound = true;
-				addToStudentQueue(studentid, remaininghelps);
 				pthread_mutex_unlock(&chair_lock);
 			}	
 			else  // if no chair available then go back to programming
 			{
-				printf("S: Student %d found no empty chair. Will try again later.\n", studentid);
+				//printf("S: Student %d found no empty chair. Will try again later.\n", studentid);
 				pthread_mutex_unlock(&chair_lock);
 				doprogramming();
 			}
 		}
 		//
 		// chair found, informs the co ordinator
+		pthread_mutex_lock(&studentqueue_lock);
+		addToStudentQueue(studentid, remaininghelps);
+		pthread_mutex_unlock(&studentqueue_lock);
 		sem_post(&student_to_coordinator);
 
 		// now waits in the waiting area for tutor to call
@@ -236,8 +242,8 @@ void *tutor_thread(void *arg)
 		tutorsactive++;
 		pthread_mutex_unlock(&tutorstat_lock);
 
-		tutoring();
 		student_tutor_map[student->studentid-1] = tutorid;
+		tutoring();
 
 		pthread_mutex_lock(&tutorstat_lock);
 		tutorsactive--;
@@ -259,7 +265,9 @@ void *coordinator_thread(void *arg)
 		// once a student notifies, queue the student to tutors based on student priority
 		printf("helps = %d, max helps = %d\n", helps, maxhelps);
 		sem_wait(&student_to_coordinator);
+		pthread_mutex_lock(&studentqueue_lock);
 		StudentDetails *student = removeFromStudentQueue(); //will the student who notified the coordinator be here?
+		pthread_mutex_unlock(&studentqueue_lock);
 		if(student == NULL) //error
 		{
 			printf("ERROR in remove from student queue. queue size = %d\n", studentqueue.count);
@@ -268,7 +276,9 @@ void *coordinator_thread(void *arg)
 		}
 
 		helps++;
+		pthread_mutex_lock(&tutoringqueue_lock);
 		addToTutoringQueue(student);
+		pthread_mutex_unlock(&tutoringqueue_lock);
 		printf("C: Student %d with priority %d added to the queue. Waiting students now = %d. Total requests = %d.\n", student->studentid, student->priority, studentqueue.count, helps); 
 		// notify an idle tutor
 		sem_post(&coordinator_to_tutor);
@@ -295,6 +305,7 @@ int main(int argc, char **argv)
 	pthread_mutex_init(&chair_lock, NULL);
 	pthread_mutex_init(&tutorstat_lock, NULL);
 	pthread_mutex_init(&tutoringqueue_lock, NULL);
+	pthread_mutex_init(&studentqueue_lock, NULL);
 	sem_init(&student_to_coordinator, 0, 0);
 	sem_init(&coordinator_to_tutor, 0, 0);
 
@@ -327,13 +338,14 @@ int main(int argc, char **argv)
 		int *studentid = malloc(sizeof(int)); //dynamic allocation avoids the use of locks
 		*studentid = i+1;
 		pthread_create(&studenttids[i], NULL, student_thread, studentid);
+		printf("created student - %d\n", *studentid);
 	}
 
 	pthread_join(coordinatortid, NULL);
 	for(i = 0; i < studentscount; i++)
 	{
 		pthread_join(studenttids[i], NULL);
-		//printf("Student thread %d finished.\n", i);
+		printf("Student thread %d finished.\n", i);
 	}
 
 }
