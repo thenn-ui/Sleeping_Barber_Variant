@@ -208,6 +208,8 @@ void *student_thread(void *arg)
 		// once help received from tutor go back to programming
 		doprogramming();
 	}
+
+	return NULL;
 }
 
 void *tutor_thread(void *arg)
@@ -253,6 +255,8 @@ void *tutor_thread(void *arg)
 		printf("T: Student %d tutored by Tutor %d. Students tutored now = %d. Total sessions tutored = %d\n", student->studentid, tutorid, tutorsactive, totalstudentshelped); 
 		free(student);
 	}
+
+	return NULL;
 }
 
 void *coordinator_thread(void *arg)
@@ -292,13 +296,14 @@ void *coordinator_thread(void *arg)
 	{
 		sem_post(&coordinator_to_tutor);
 	}
-	
+
+	return NULL;
 }
 
 
 int main(int argc, char **argv)
 {
-	if(argc < 2 || argc > 5)
+	if(argc != 5)
 	{
 		exit(0);
 	}
@@ -331,23 +336,22 @@ int main(int argc, char **argv)
 	}
 
 	pthread_t coordinatortid;
-	pthread_create(&coordinatortid, NULL, coordinator_thread, &tutorscount);
+	assert(pthread_create(&coordinatortid, NULL, coordinator_thread, &tutorscount) == 0);
 
 	pthread_t tutorstids[tutorscount];
 	for(i = 0; i < tutorscount; i++)
 	{
 		int *tutorid = malloc(sizeof(int));
 		*tutorid = i+1;
-		pthread_create(&tutorstids[i], NULL, tutor_thread, tutorid);
+		assert(pthread_create(&tutorstids[i], NULL, tutor_thread, tutorid) == 0);
 	}
-
 
 	pthread_t studenttids[studentscount];
 	for(i = 0; i < studentscount; i++)
 	{
 		int *studentid = malloc(sizeof(int)); //dynamic allocation avoids the use of locks
 		*studentid = i+1;
-		pthread_create(&studenttids[i], NULL, student_thread, studentid);
+		assert(pthread_create(&studenttids[i], NULL, student_thread, studentid) == 0);
 	}
 
 	// wait for all student threads to finish
