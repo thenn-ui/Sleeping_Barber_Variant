@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <unistd.h>
 #include <semaphore.h>
+#include <assert.h>
+
 
 // structures
 
@@ -22,23 +24,25 @@ typedef struct StudentQueue{
 }StudentQueue;
 
 // global variables
-int helps;
-int maxhelps;
-int helpcount;
-sem_t *tutor_to_students;
-int *student_tutor_map;
+int helps;			// variable to track number of requests sent
+int maxhelps;			// max possible help requests
+int helpcount;			// 
+sem_t *tutor_to_students;	
+int *student_tutor_map;		// mapping between tutorid and studentid for each session
 bool coordinatoractive;
+int chaircount;			// number of chairs in the csmc waiting area
 
 // shared variables
-int num_chairs;
+int num_availablechairs;
 pthread_mutex_t chair_lock;
 
 sem_t student_to_coordinator;
 sem_t coordinator_to_tutor;
+sem_t students_exited;
 
-StudentQueue studentqueue; // FIFO queue handled by student and coordinator
+StudentQueue studentqueue; 	// FIFO queue handled by student and coordinator
 pthread_mutex_t studentqueue_lock;
-StudentQueue *tutoringqueue; // Multi level FIFO queue handled by coordinator and Tutors
+StudentQueue *tutoringqueue; 	// Multi level FIFO queue handled by coordinator and Tutors
 pthread_mutex_t tutoringqueue_lock;
 
 int tutorsactive;
@@ -112,22 +116,15 @@ StudentDetails* removeFromTutoringQueue() //will always remove student with max 
 
 	StudentQueue *priorityqueue = NULL;
 	int priority;
-	printf("==============================================\n");
 	for(priority = helpcount; priority > 0; priority--)
 	{
 		priorityqueue = &tutoringqueue[priority];
-		printf("pqueue - %p. priority - %d. qcount - %d. pqueue.head = %p\n", priorityqueue, priority, priorityqueue->count, priorityqueue->Head);
 		if(priorityqueue->count > 0)
 			break;
 	}
-	printf("==============================================\n");
-
-	if(priorityqueue == NULL || priorityqueue->Head == NULL) // No student in the queue
-	{
-		printf("Error in remove from tutor queue. Checked queue count = %d\n", priorityqueue->count);
-		abort();
-		return NULL;
-	}
+	
+	assert(priorityqueue != NULL);
+	assert(priorityqueue->Head != NULL);
 
 	StudentDetails *studentrecord = priorityqueue->Head;
 	priorityqueue->Head =  priorityqueue->Head->next;
@@ -140,6 +137,7 @@ StudentDetails* removeFromTutoringQueue() //will always remove student with max 
 
 	return studentrecord;
 }
+
 // implemetation
 void tutoring()
 {
@@ -156,7 +154,6 @@ void *student_thread(void *arg)
 	int studentid = *(int*)arg;
 	int remaininghelps = helpcount;
 	free(arg);
-	printf("student id = %d\n", studentid);
 
 	// arrives at the csmc center 
 	while(remaininghelps > 0)
@@ -166,21 +163,21 @@ void *student_thread(void *arg)
 		while(!chairfound)
 		{
 			pthread_mutex_lock(&chair_lock);
-			if(num_chairs > 0)
+			if(num_availablechairs > 0)
 			{
-				num_chairs--;
-				printf("S: Student %d takes a seat. Empty chairs = %d\n", studentid, num_chairs);
+				num_availablechairs--;
+				printf("S: Student %d takes a seat. Empty chairs = %d\n", studentid, num_availablechairs);
 				chairfound = true;
 				pthread_mutex_unlock(&chair_lock);
 			}	
 			else  // if no chair available then go back to programming
 			{
-				//printf("S: Student %d found no empty chair. Will try again later.\n", studentid);
+				printf("S: Student %d found no empty chair. Will try again later.\n", studentid);
 				pthread_mutex_unlock(&chair_lock);
 				doprogramming();
 			}
 		}
-		//
+		
 		// chair found, informs the co ordinator
 		pthread_mutex_lock(&studentqueue_lock);
 		addToStudentQueue(studentid, remaininghelps);
@@ -192,7 +189,7 @@ void *student_thread(void *arg)
 
 		// Now moves to tutoring area. Hence gives up the chair
 		pthread_mutex_lock(&chair_lock);
-		num_chairs++;
+		num_availablechairs++;
 		pthread_mutex_unlock(&chair_lock);
 
 		// gets tutored in tutoring area;
@@ -200,6 +197,7 @@ void *student_thread(void *arg)
 		printf("S: Student %d received help from Tutor %d\n", studentid, student_tutor_map[studentid-1]); 
 		student_tutor_map[studentid-1] = 0;
 		remaininghelps--;
+
 		// once help received from tutor go back to programming
 		doprogramming();
 	}
@@ -209,31 +207,21 @@ void *tutor_thread(void *arg)
 {
 	int tutorid = *(int*)arg;
 	free(arg);
-	//printf("tutor id = %d\n", tutorid);
 	while(true)
 	{
-		//if(coordinatoractive)
-		//{
-			// wake up by co ordinator
-			sem_wait(&coordinator_to_tutor);
-		//}
-		//else
-		//{
-		//	break;
-		//}
+		// wake up by co ordinator
+		sem_wait(&coordinator_to_tutor);
+
+		if(!coordinatoractive)
+			break;
 
 		// find student with the highest priority
 		pthread_mutex_lock(&tutoringqueue_lock);
 		StudentDetails *student = removeFromTutoringQueue();
 		pthread_mutex_unlock(&tutoringqueue_lock);
 
-		if(student == NULL)
-		{
-			printf("Error in tutor thread %d\n", tutorid);
-			abort();
-			continue;
-		}
-
+		assert(student != NULL);
+		
 		// notify student to move to tutoring area
 		sem_post(&tutor_to_students[student->studentid-1]);
 
@@ -250,42 +238,50 @@ void *tutor_thread(void *arg)
 		totalstudentshelped++;
 		pthread_mutex_unlock(&tutorstat_lock);
 
+		assert(totalstudentshelped <= helps);
 		printf("T: Student %d tutored by Tutor %d. Students tutored now = %d. Total sessions tutored = %d\n", student->studentid, tutorid, tutorsactive, totalstudentshelped); 
-		//free(student);
+		free(student);
 	}
 }
 
 void *coordinator_thread(void *arg)
 {
-	printf("coordinator thread started...\n");
 	coordinatoractive = true;
+	int tutorcount = *(int*)arg;
 	helps = 0;
 	while(helps < maxhelps)
 	{
-		// once a student notifies, queue the student to tutors based on student priority
-		printf("helps = %d, max helps = %d\n", helps, maxhelps);
+		// wait for student to notify(adds itself to the student queue), 
 		sem_wait(&student_to_coordinator);
 		pthread_mutex_lock(&studentqueue_lock);
-		StudentDetails *student = removeFromStudentQueue(); //will the student who notified the coordinator be here?
+		StudentDetails *student = removeFromStudentQueue(); 
 		pthread_mutex_unlock(&studentqueue_lock);
-		if(student == NULL) //error
-		{
-			printf("ERROR in remove from student queue. queue size = %d\n", studentqueue.count);
-			abort();
-			continue;
-		}
+		
+		assert(student != NULL);
 
 		helps++;
+		// queue the student to tutors based on student priority
 		pthread_mutex_lock(&tutoringqueue_lock);
 		addToTutoringQueue(student);
 		pthread_mutex_unlock(&tutoringqueue_lock);
+		assert(studentqueue.count <= chaircount);
 		printf("C: Student %d with priority %d added to the queue. Waiting students now = %d. Total requests = %d.\n", student->studentid, student->priority, studentqueue.count, helps); 
+		
 		// notify an idle tutor
 		sem_post(&coordinator_to_tutor);
 
 	}
 	
-	printf("Coordinator gone home!!\n");
+	// wait for all students to finish. signal sent from main thread
+	sem_wait(&students_exited);
+	coordinatoractive = false;
+	// post to all tutors threads so that they can exit
+	int i;
+	for(i = 0; i < tutorcount; i++)
+	{
+		sem_post(&coordinator_to_tutor);
+	}
+	
 }
 
 
@@ -298,7 +294,7 @@ int main(int argc, char **argv)
 
 	int studentscount = strtol(argv[1], NULL, 10);
 	int tutorscount = strtol(argv[2], NULL, 10);
-	num_chairs = strtol(argv[3], NULL, 10);
+	chaircount = num_availablechairs = strtol(argv[3], NULL, 10);
 	helpcount = strtol(argv[4], NULL, 10); //this will set the priority for each student
 	maxhelps = helpcount * studentscount;
 
@@ -308,6 +304,7 @@ int main(int argc, char **argv)
 	pthread_mutex_init(&studentqueue_lock, NULL);
 	sem_init(&student_to_coordinator, 0, 0);
 	sem_init(&coordinator_to_tutor, 0, 0);
+	sem_init(&students_exited, 0, 0);
 
 	int i;
 
@@ -321,7 +318,7 @@ int main(int argc, char **argv)
 	}
 
 	pthread_t coordinatortid;
-	pthread_create(&coordinatortid, NULL, coordinator_thread, NULL);
+	pthread_create(&coordinatortid, NULL, coordinator_thread, &tutorscount);
 
 	pthread_t tutorstids[tutorscount];
 	for(i = 0; i < tutorscount; i++)
@@ -338,14 +335,25 @@ int main(int argc, char **argv)
 		int *studentid = malloc(sizeof(int)); //dynamic allocation avoids the use of locks
 		*studentid = i+1;
 		pthread_create(&studenttids[i], NULL, student_thread, studentid);
-		printf("created student - %d\n", *studentid);
 	}
 
-	pthread_join(coordinatortid, NULL);
+	// wait for all student threads to finish
 	for(i = 0; i < studentscount; i++)
 	{
 		pthread_join(studenttids[i], NULL);
-		printf("Student thread %d finished.\n", i);
 	}
 
+	// notify the coordinator to start exiting threads
+	sem_post(&students_exited);
+
+	// wait for all tutors threads to finish
+	for(i = 0; i < tutorscount; i++)
+	{
+		pthread_join(tutorstids[i], NULL);
+	}
+
+	// wait for coordinator thread to finish
+	pthread_join(coordinatortid, NULL);
+
+	return EXIT_SUCCESS;
 }
