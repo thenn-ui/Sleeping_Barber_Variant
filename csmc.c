@@ -27,7 +27,9 @@ typedef struct StudentQueue{
 int helps;			// variable to track number of requests sent
 int maxhelps;			// max possible help requests
 int helpcount;			// 
-sem_t *tutor_to_students;	
+sem_t *tutor_to_students;
+sem_t *endsession;		// semaphore for signalling students to end session
+sem_t *startsession;		// semaphore for signalling students to start session
 int *student_tutor_map;		// mapping between tutorid and studentid for each session
 bool coordinatoractive;
 int chaircount;			// number of chairs in the csmc waiting area
@@ -39,6 +41,7 @@ pthread_mutex_t chair_lock;
 sem_t student_to_coordinator;
 sem_t coordinator_to_tutor;
 sem_t students_exited;
+
 
 StudentQueue studentqueue; 	// FIFO queue handled by student and coordinator
 pthread_mutex_t studentqueue_lock;
@@ -193,7 +196,11 @@ void *student_thread(void *arg)
 		pthread_mutex_unlock(&chair_lock);
 
 		// gets tutored in tutoring area;
+		// wait for tutor to start session
+		sem_wait(&startsession[studentid-1]);
 		tutoring();
+		// wait for tutor to end session
+		sem_wait(&endsession[studentid-1]);
 		printf("S: Student %d received help from Tutor %d\n", studentid, student_tutor_map[studentid-1]); 
 		student_tutor_map[studentid-1] = 0;
 		remaininghelps--;
@@ -231,7 +238,11 @@ void *tutor_thread(void *arg)
 		pthread_mutex_unlock(&tutorstat_lock);
 
 		student_tutor_map[student->studentid-1] = tutorid;
+		// notify student that session is starting
+		sem_post(&startsession[student->studentid-1]);
 		tutoring();
+		// notify student that session is ending
+		sem_post(&endsession[student->studentid-1]);
 
 		pthread_mutex_lock(&tutorstat_lock);
 		tutorsactive--;
@@ -309,6 +320,8 @@ int main(int argc, char **argv)
 	int i;
 
 	tutor_to_students = malloc(sizeof(sem_t) * studentscount); //a semaphore for each student
+	startsession = malloc(sizeof(sem_t) * studentscount);
+	endsession = malloc(sizeof(sem_t) * studentscount);
 	tutoringqueue = calloc(helpcount+1, sizeof(StudentQueue));
 	student_tutor_map = malloc(sizeof(int) * studentscount);
 
