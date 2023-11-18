@@ -141,6 +141,19 @@ StudentDetails* removeFromTutoringQueue() //will always remove student with max 
 	return studentrecord;
 }
 
+int getTutoringQueueWaitCount()
+{
+	StudentQueue *priorityqueue = NULL;
+	int priority, waitcount = 0;
+	for(priority = helpcount; priority > 0; priority--)
+	{
+		priorityqueue = &tutoringqueue[priority];
+		waitcount += priorityqueue->count;
+	}
+
+	return waitcount;
+}
+
 // implemetation
 void tutoring()
 {
@@ -278,9 +291,10 @@ void *coordinator_thread(void *arg)
 		// queue the student to tutors based on student priority
 		pthread_mutex_lock(&tutoringqueue_lock);
 		addToTutoringQueue(student);
+		int waitingcount = getTutoringQueueWaitCount();
 		pthread_mutex_unlock(&tutoringqueue_lock);
-		assert(studentqueue.count <= chaircount);
-		printf("C: Student %d with priority %d added to the queue. Waiting students now = %d. Total requests = %d.\n", student->studentid, student->priority, studentqueue.count, helps); 
+		assert(waitingcount <= chaircount);
+		printf("C: Student %d with priority %d added to the queue. Waiting students now = %d. Total requests = %d.\n", student->studentid, student->priority, waitingcount, helps); 
 		
 		// notify an idle tutor
 		sem_post(&coordinator_to_tutor);
