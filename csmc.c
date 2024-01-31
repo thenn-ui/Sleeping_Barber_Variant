@@ -26,7 +26,7 @@ typedef struct StudentQueue{
 // global variables
 int helps;			// variable to track number of requests sent
 int maxhelps;			// max possible help requests
-int helpcount;			// 
+int helpcount;			// max number of helps per student (also used for priority)
 sem_t *tutor_to_students;
 sem_t *endsession;		// semaphore for signalling students to end session
 sem_t *startsession;		// semaphore for signalling students to start session
@@ -41,7 +41,6 @@ pthread_mutex_t chair_lock;
 sem_t student_to_coordinator;
 sem_t coordinator_to_tutor;
 sem_t students_exited;
-
 
 StudentQueue studentqueue; 	// FIFO queue handled by student and coordinator
 pthread_mutex_t studentqueue_lock;
@@ -279,7 +278,7 @@ void *coordinator_thread(void *arg)
 	helps = 0;
 	while(helps < maxhelps)
 	{
-		// wait for student to notify(adds itself to the student queue), 
+		// wait for student to notify(student adds itself to the student queue), 
 		sem_wait(&student_to_coordinator);
 		pthread_mutex_lock(&studentqueue_lock);
 		StudentDetails *student = removeFromStudentQueue(); 
